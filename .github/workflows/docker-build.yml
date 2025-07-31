@@ -33,4 +33,4 @@ jobs:
         env:
           GKE_SA_KEY: ${{ secrets.GKE_SA_KEY }}
         run: |
-          bin/build-docker-push prometheus_dirsize_exporter
+          bin/build-docker-push prometheus-dirsize-exporter
