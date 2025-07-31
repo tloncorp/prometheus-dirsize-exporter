@@ -8,7 +8,7 @@
 #
 
 COMPONENTS="\
-    weimon \
+    prometheus-dirsize-exporter \
     "
 
 #
