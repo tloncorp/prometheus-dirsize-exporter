@@ -17,7 +17,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'dirsize-exporter = prometheus-dirsize-exporter.exporter:main',
+            'dirsize-exporter = prometheus_dirsize_exporter.exporter:main',
         ]
     }
 )

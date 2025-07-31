@@ -8,7 +8,7 @@
 #
 
 COMPONENTS="\
-    prometheus-dirsize-exporter \
+    prometheus_dirsize_exporter \
     "
 
 #
