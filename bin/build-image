@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+#
+# These are the subdirectories here each containing a Dockerfile. At the
+# moment we get away with the assumption that the binary name matches the the
+# image directory's basename. If/when that changes, switch to an associative
+# array.
+#
+
+COMPONENTS="\
+    weimon \
+    "
+
+#
+# Handle command line. If there is an argument, build only that. Otherwise,
+# build all targets.
+#
+
+if [ -n "$1" ]
+then
+    TARGETS="$@"
+else
+    TARGETS="$COMPONENTS"
+fi
+
+set -u
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+
+if [ "${PWD}" != "${ROOT}" ]
+then
+    echo "Please run from top-level, ${ROOT}"
+    exit 2
+fi
+
+#
+# We can now make the assumption that all paths are relative to the top-level.
+#
+
+WORKDIR="$(pwd)"
+
+#
+# Record the current commit hash for placement in containers and for later use
+# in forming production image names:
+#
+
+git rev-parse --short HEAD > .commit
+
+for TARGET in ${TARGETS}
+do
+
+
+    IMAGE=$(basename ${TARGET})
+
+    cp .stamp ${WORKDIR}/${TARGET}
+    cp .commit ${WORKDIR}/${TARGET}
+
+#
+# Make the Docker image:
+#
+
+    podman build \
+        --tag=localhost/tloncorp/${IMAGE}:latest \
+        -f ${WORKDIR}/Dockerfile \
+        .
+done

@@ -59,10 +59,32 @@ class BudgetedDirInfoWalker:
         self._io_calls_since_last_reset += 1
         return return_value
 
+    def find_urb_directory(self, base_path: str) -> Optional[str]:
+        """
+        Find the first subdirectory that contains a .urb subdirectory.
+        Only used for tlon_ volumes.
+        """
+        try:
+            children = [
+                os.path.join(base_path, c)
+                for c in self.do_iops_action(os.listdir, base_path)
+            ]
+            
+            dirs = [c for c in children if self.do_iops_action(os.path.isdir, c)]
+            
+            for d in dirs:
+                urb_path = os.path.join(d, '.urb')
+                if self.do_iops_action(os.path.isdir, urb_path):
+                    return d
+            
+            return None
+        except (OSError, PermissionError):
+            return None
+
     def get_dir_info(self, path: str) -> Optional[DirInfo]:
         start_time = time.monotonic()
         try:
-            self_statinfo = os.stat(path)
+            self_statinfo = self.do_iops_action(os.stat, path)
         except FileNotFoundError:
             # Directory was deleted from the time it was listed and now
             return None
@@ -94,7 +116,7 @@ class BudgetedDirInfoWalker:
             try:
                 stat_info = self.do_iops_action(os.stat, f, follow_symlinks=False)
             except FileNotFoundError:
-                # File might have been deleted from the time we listed it anda now
+                # File might have been deleted from the time we listed it and now
                 continue
             total_size += stat_info.st_size
             if latest_mtime < stat_info.st_mtime:
@@ -112,8 +134,8 @@ class BudgetedDirInfoWalker:
             entries_count += dirinfo.entries_count
             if latest_mtime < dirinfo.latest_mtime:
                 latest_mtime = dirinfo.latest_mtime
-            if oldest_mtime > dirinfo.latest_mtime:
-                oldest_mtime = dirinfo.latest_mtime
+            if oldest_mtime > dirinfo.oldest_mtime:
+                oldest_mtime = dirinfo.oldest_mtime
 
         return DirInfo(
             path=os.path.basename(path),
@@ -124,7 +146,7 @@ class BudgetedDirInfoWalker:
             processing_time=time.monotonic() - start_time,
         )
 
-    def get_subdirs_info(self, dir_path: str) -> Generator[DirInfo | None, None, None]:
+    def get_subdirs_info(self, dir_path: str) -> Generator[tuple[str, DirInfo] | None, None, None]:
         try:
             children = [
                 os.path.abspath(os.path.join(dir_path, c))
@@ -134,7 +156,26 @@ class BudgetedDirInfoWalker:
             dirs = [c for c in children if self.do_iops_action(os.path.isdir, c)]
 
             for c in dirs:
-                yield self.get_dir_info(c)
+                dir_name = os.path.basename(c)
+                
+                # For tlon_ volumes, look for .urb subdirectory
+                if "tlon_" in dir_name:
+                    urb_dir = self.find_urb_directory(c)
+                    if urb_dir:
+                        dirinfo = self.get_dir_info(urb_dir)
+                        if dirinfo:
+                            # Use the original directory name but measure the urb subdirectory
+                            yield (dir_name, dirinfo)
+                    else:
+                        # No .urb found, measure the whole directory
+                        dirinfo = self.get_dir_info(c)
+                        if dirinfo:
+                            yield (dir_name, dirinfo)
+                else:
+                    # Non-tlon volumes, measure normally
+                    dirinfo = self.get_dir_info(c)
+                    if dirinfo:
+                        yield (dir_name, dirinfo)
         except OSError as e:
             if e.errno == 116:
                 # See https://github.com/yuvipanda/prometheus-dirsize-exporter/issues/6
@@ -186,23 +227,46 @@ def main() -> Never:
     args = argparser.parse_args()
 
     start_http_server(args.port)
+    
+    # track currently active directories to clean up stale metrics
+    active_directories = set()
+    
     while True:
         walker = BudgetedDirInfoWalker(args.iops_budget)
-        for subdir_info in walker.get_subdirs_info(args.parent_dir):
-            if subdir_info is None:
+        current_directories = set()
+        
+        for result in walker.get_subdirs_info(args.parent_dir):
+            if result is None:
                 continue
-            metrics.TOTAL_SIZE.labels(subdir_info.path).set(subdir_info.size)
-            metrics.LATEST_MTIME.labels(subdir_info.path).set(subdir_info.latest_mtime)
-            metrics.OLDEST_MTIME.labels(subdir_info.path).set(subdir_info.oldest_mtime)
-            metrics.ENTRIES_COUNT.labels(subdir_info.path).set(
-                subdir_info.entries_count
-            )
+                
+            dir_name, subdir_info = result
+            current_directories.add(dir_name)
+            
+            metrics.TOTAL_SIZE.labels(dir_name).set(subdir_info.size)
+            metrics.LATEST_MTIME.labels(dir_name).set(subdir_info.latest_mtime)
+            metrics.OLDEST_MTIME.labels(dir_name).set(subdir_info.oldest_mtime)
+            metrics.ENTRIES_COUNT.labels(dir_name).set(subdir_info.entries_count)
             if args.enable_detailed_processing_time_metric:
-                metrics.PROCESSING_TIME.labels(subdir_info.path).set(
-                    subdir_info.processing_time
-                )
-            metrics.LAST_UPDATED.labels(subdir_info.path).set(time.time())
-            print(f"Updated values for {subdir_info.path}")
+                metrics.PROCESSING_TIME.labels(dir_name).set(subdir_info.processing_time)
+            metrics.LAST_UPDATED.labels(dir_name).set(time.time())
+            print(f"Updated values for {dir_name}")
+        
+        # clean up metrics for directories that no longer exist
+        stale_directories = active_directories - current_directories
+        for stale_dir in stale_directories:
+            try:
+                metrics.TOTAL_SIZE.remove(stale_dir)
+                metrics.LATEST_MTIME.remove(stale_dir)
+                metrics.OLDEST_MTIME.remove(stale_dir)
+                metrics.ENTRIES_COUNT.remove(stale_dir)
+                metrics.LAST_UPDATED.remove(stale_dir)
+                if args.enable_detailed_processing_time_metric:
+                    metrics.PROCESSING_TIME.remove(stale_dir)
+                print(f"Cleaned up stale metrics for {stale_dir}")
+            except KeyError:
+                pass
+        
+        active_directories = current_directories
         time.sleep(args.wait_time_minutes * 60)
 
 

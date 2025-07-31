@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+#
+# These are the subdirectories here each containing a Dockerfile. At the
+# moment we get away with the assumption that the binary name matches the the
+# image directory's basename. If/when that changes, switch to an associative
+# array.
+#
+
+COMPONENTS="\
+    prometheus_dirsize_exporter \
+    "
+
+#
+# Handle command line. If there is an argument, build only that. Otherwise,
+# build all targets.
+#
+
+if [ -n "$1" ]
+then
+    TARGETS="$@"
+else
+    TARGETS="$COMPONENTS"
+fi
+
+set -u
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+
+if [ "${PWD}" != "${ROOT}" ]
+then
+    echo "Please run from top-level, ${ROOT}"
+    exit 2
+fi
+
+#
+# Login into the container registry:
+
+podman login ${GAR_LOCATION}-docker.pkg.dev -u _json_key -p "${GKE_SA_KEY}"
+
+
+for TARGET in ${TARGETS}
+do
+
+    IMAGE=$(basename ${TARGET})
+
+#
+# Make the Docker image:
+#
+
+    podman push \
+        localhost/tloncorp/${IMAGE}:latest \
+        ${GAR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/images/${IMAGE}:$(cat .commit)
+    
+    podman push \
+        localhost/tloncorp/${IMAGE}:latest \
+        ${GAR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/images/${IMAGE}:latest
+done

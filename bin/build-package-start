@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -u
+set -e
+
+#
+# Write the build timestamp that will be used to name any new containers made
+# by this Build and Packaging run. We do it here so that the time is before
+# any of the builds start so we aren't misled about something being
+# subsequently committed being in the build.
+#
+
+date -u +%Y%m%dT%H%M%SZ > .stamp
+
+# if the tmp directory doesn't exist, create it
+if [ ! -d tmp ]
+then
+    mkdir -p tmp
+fi
