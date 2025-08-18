@@ -1,0 +1,36 @@
+name: Test Build and Push Docker Image
+on:
+  push:
+    branches:
+      - main
+    tags: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build_and_push:
+    environment: test
+    env:
+      GAR_LOCATION: us-central1
+      PROJECT_ID: test-61eb624c
+      GKE_SA_KEY: ${{ secrets.GKE_SA_KEY }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      
+      - name: Record timestamp
+        run: |
+          bin/build-package-start
+      
+      - name: Build the prometheus-dirsize-exporter image
+        run: |
+          bin/build-image prometheus-dirsize-exporter
+      
+      - name: Push to GCP Artifact Registry
+        if: github.event_name != 'pull_request'
+        env:
+          GKE_SA_KEY: ${{ secrets.GKE_SA_KEY }}
+        run: |
+          bin/build-docker-push prometheus-dirsize-exporter
